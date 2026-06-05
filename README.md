@@ -111,7 +111,7 @@ template.
 Built in independent chunks; each leaves the project runnable.
 
 - [x] **Chunk 1** — Project setup & configuration
-- [ ] **Chunk 2** — Ingestion layer (EIA API client)
+- [x] **Chunk 2** — Ingestion layer (EIA API client)
 - [ ] **Chunk 3** — Transformation pipeline
 - [ ] **Chunk 4** — Storage layer (repository pattern)
 - [ ] **Chunk 5** — Orchestration script

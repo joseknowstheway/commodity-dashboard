@@ -119,3 +119,131 @@ frozen `Settings` singleton. Validation is *not* run on import — that's deferr
 to `validate()`.
 
 ---
+
+## Chunk 2 — Ingestion Layer (EIA API Client)
+
+### What was built
+- `ingestion/eia_client.py` containing:
+  - `EIAClient` — an OOP client for the **EIA v2** REST API.
+  - `EIAAPIError` — one project-specific exception that wraps all failure modes.
+- Public methods:
+  - `fetch_series(commodity, start_date, end_date)` — fetches one series, returns raw JSON.
+  - `fetch_multiple(commodities, ...)` — fetches many, keyed by `series_id`, skipping failures.
+- Internals: `_build_params` (v2 query shaping), `_get` (retry loop + error
+  classification), `_parse_json`, `_sleep_backoff`, `_maybe_honor_retry_after`.
+- Extended the `COMMODITIES` catalog in `config.py` to carry the v2 `route` and
+  `series_id` facet code (+ `frequency`), verified against the live API.
+- A `__main__` smoke test so `python -m ingestion.eia_client` fetches the
+  default commodity and prints the latest rows.
+
+### Key ideas
+
+**1. v1 vs v2 API — read the docs, don't trust the spec.**
+The project brief listed legacy **v1** series IDs (`PET.RWTC.W`). The current
+EIA API is **v2**, which addresses data by a *route* (`petroleum/pri/spt`) plus a
+*series facet* (`RWTC`) and a *frequency*. I probed the live v2 endpoints to
+confirm the correct route/facet for each commodity before writing a line of the
+client. Interview-ready point: *I used the current API version, not a deprecated
+one — and I verified the contract empirically.*
+
+**2. Retry only what's worth retrying (error classification).**
+Failures fall into two buckets. **Transient** — timeouts, dropped connections,
+`429` (rate limited), `5xx` (server problems) — are retried. **Permanent** —
+other `4xx` like `400/403/404` — are raised *immediately*, because retrying a
+malformed or unauthorized request just wastes time and hammers the server. This
+distinction is the heart of good retry logic.
+
+**3. Exponential backoff + jitter.**
+The delay before retry *n* is `backoff_factor * 2**n` (0.5s, 1s, 2s, 4s…), plus a
+small random jitter. Exponential growth gives a struggling server room to
+recover; **jitter** prevents the "thundering herd" problem where many clients
+retry in lockstep and re-spike the load at the same instant. We also honor a
+`Retry-After` header if the server sends one (common with `429`).
+
+**4. Always set a timeout.**
+Every request passes `timeout=`. Without it, a hung server can block the client
+*forever* — one of the most common production outages. A timeout converts "hang
+forever" into a catchable, retryable error.
+
+**5. One Session for connection pooling.**
+The client holds a `requests.Session`, which keeps TCP connections alive
+(keep-alive) and reuses them across requests instead of paying the
+connect/TLS-handshake cost every call. The session is also injectable, which
+makes the client trivial to unit-test with a mock.
+
+**6. Wrap failures in one exception type.**
+Callers catch `EIAAPIError`, not a grab-bag of `requests.Timeout`,
+`ConnectionError`, `HTTPError`, and `ValueError`. This is the **exception
+translation** pattern: the ingestion layer's failure contract is one type, so
+upstream code (pipeline, orchestrator) stays clean.
+
+**7. Single responsibility.**
+The client *fetches and returns raw JSON* — it does not parse into DataFrames or
+touch the database. Parsing is the transform layer's job (Chunk 3). Keeping the
+client narrow makes each layer independently testable.
+
+**8. Partial failure tolerance in `fetch_multiple`.**
+One bad series is logged and skipped rather than aborting the whole batch — a
+single failing commodity can't sink an entire pipeline run.
+
+### Mistakes & fixes
+- **The spec's series IDs didn't work.** v1 IDs like `PET.RWTC.W` return nothing
+  on the v2 API. **Fix:** probed `https://api.eia.gov/v2/...` directly to find
+  the right `route` + `series` facet per commodity, then redesigned the
+  `Commodity` dataclass around v2 (route/facet/frequency).
+- **Deviated from the spec's method signature.** The brief said
+  `fetch_series(series_id, ...)`, but v2 needs *route + facet*, not a single ID.
+  **Fix:** `fetch_series` takes a `Commodity` object (the single source of
+  truth), which is cleaner than threading two strings around — a deliberate,
+  defensible deviation.
+- **black flagged a long log line (E501, 93 > 88).** **Fix:** ran `black`, which
+  wrapped the `logger.info(...)` call across lines.
+
+### Interview Q&A
+
+**Q: Which errors do you retry, and which do you not? Why?**
+A: I retry *transient* failures — network timeouts, connection drops, HTTP 429,
+and 5xx — because they're likely to succeed on a second attempt. I do **not**
+retry other 4xx (400/403/404): those mean the request itself is wrong
+(bad params, bad key, missing resource), so retrying can't help and just adds
+load. I classify on status code in `_get` and raise `EIAAPIError` immediately for
+the non-retryable bucket.
+
+**Q: What is jitter and why add it to backoff?**
+A: Jitter is a small random amount added to each backoff delay. Without it, many
+clients that failed at the same moment would retry at the exact same future
+instants — a "thundering herd" that re-overloads the server in synchronized
+waves. Randomizing the delays spreads the retries out.
+
+**Q: Why pass a timeout to every request?**
+A: Because TCP has no built-in deadline — a stalled server can leave a request
+hanging indefinitely, tying up a thread/connection forever. A timeout turns that
+into a `requests.Timeout` I can catch and retry. Omitting timeouts is a classic
+cause of cascading production hangs.
+
+**Q: Why reuse a single `requests.Session`?**
+A: Connection pooling. A Session keeps TCP/TLS connections alive and reuses them
+across requests, avoiding a fresh handshake every call — meaningfully faster for
+multiple fetches. It also gives me a clean injection point for testing.
+
+**Q: How did you test the retry logic without waiting on real backoff or
+hitting the network?**
+A: I injected a `MagicMock` session with scripted responses (e.g. `[503, 503,
+200]`) and patched `time.sleep`, then asserted on `session.get.call_count` and
+the raised exception. That verifies retry-then-succeed, immediate raise on 404,
+retry exhaustion, and timeout handling — all in milliseconds, deterministically.
+
+**Q: Why wrap everything in `EIAAPIError` instead of letting requests'
+exceptions propagate?**
+A: Exception translation. Callers shouldn't need to know the ingestion layer
+uses `requests` — that's an implementation detail. Exposing one failure type
+keeps the boundary clean and means I could swap `requests` for `httpx` later
+without changing any caller's `except` clause.
+
+**Q: How would you handle a series with more rows than one request returns?**
+A: The v2 API caps a page at 5000 rows and reports `total`. Today our weekly
+windows are ~100 rows so one request suffices, and I log a warning if `total`
+ever exceeds the requested `length`. To scale, I'd loop on the `offset`
+parameter, accumulating pages until I've fetched `total` rows.
+
+---

@@ -26,32 +26,43 @@ load_dotenv(PROJECT_ROOT / ".env", override=False)
 
 @dataclass(frozen=True)
 class Commodity:
-    """A single tradable commodity and its EIA series identifier."""
+    """A single tradable commodity and how to fetch it from the EIA v2 API.
+
+    The EIA v2 API addresses data by a *route* (e.g. "petroleum/pri/spt") plus
+    a *series* facet (e.g. "RWTC"), rather than the legacy v1 dotted series ID
+    (e.g. "PET.RWTC.W"). `series_id` here is the v2 facet code and doubles as
+    the stable primary identifier stored in the database.
+    """
 
     key: str  # internal key, e.g. "WTI_CRUDE"
     label: str  # human-readable name for the UI
-    series_id: str  # EIA API series ID
+    route: str  # EIA v2 data route, e.g. "petroleum/pri/spt"
+    series_id: str  # EIA v2 series facet code, e.g. "RWTC" (also the DB key)
     unit: str  # display unit, e.g. "$/bbl"
+    frequency: str = "weekly"  # EIA frequency for this series
 
 
-# EIA series catalog. Series IDs come from https://www.eia.gov/opendata/
+# EIA v2 series catalog. Routes/facets verified against https://api.eia.gov/v2.
 COMMODITIES: dict[str, Commodity] = {
     "WTI_CRUDE": Commodity(
         key="WTI_CRUDE",
         label="WTI Crude Oil",
-        series_id="PET.RWTC.W",
+        route="petroleum/pri/spt",
+        series_id="RWTC",
         unit="$/bbl",
     ),
     "NATURAL_GAS": Commodity(
         key="NATURAL_GAS",
         label="Natural Gas (Henry Hub)",
-        series_id="NG.RNGWHHD.W",
+        route="natural-gas/pri/fut",
+        series_id="RNGWHHD",
         unit="$/MMBtu",
     ),
     "GASOLINE": Commodity(
         key="GASOLINE",
         label="Regular Gasoline (US avg)",
-        series_id="PET.EMM_EPMR_PTE_NUS_DPG.W",
+        route="petroleum/pri/gnd",
+        series_id="EMM_EPMR_PTE_NUS_DPG",
         unit="$/gal",
     ),
 }
