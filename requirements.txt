@@ -1,0 +1,20 @@
+# Runtime dependencies (pinned for reproducible installs).
+# Verified resolvable on Python 3.14.
+
+# REST API ingestion
+requests==2.34.2
+
+# Data transformation & analytics
+pandas==3.0.3
+numpy==2.4.6
+
+# Time-series forecasting
+statsmodels==0.14.6
+scikit-learn==1.9.0
+
+# Interactive dashboard
+dash==4.2.0
+plotly==6.8.0
+
+# Configuration / environment management
+python-dotenv==1.2.2
