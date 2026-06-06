@@ -13,6 +13,8 @@ time-series forecasting.
 
 📓 See [`concept_walkthrough.md`](concept_walkthrough.md) for a stage-by-stage
 log of the concepts, design decisions, and trade-offs behind the build.
+🧪 See [`MANUAL_TESTING.md`](MANUAL_TESTING.md) for hands-on commands to exercise
+each layer by hand.
 
 ---
 
