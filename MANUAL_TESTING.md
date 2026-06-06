@@ -350,6 +350,36 @@ with CommodityRepository(settings.db_path) as repo:
 print(PriceForecaster().fit(df).predict(steps=8))
 ```
 
+## Chunk 7 — Dashboard (Plotly Dash)
+
+> Requires a populated DB (`python run_pipeline.py --refresh`).
+
+### Launch it
+```bash
+python -m dashboard.app
+```
+Open http://127.0.0.1:8050 — pick a commodity, drag the date range, and watch the
+KPI cards, price+forecast chart (with CI band), and z-score bars update.
+
+### Verify the render layer without a browser (REPL)
+```python
+from dashboard.app import create_app
+from dashboard.callbacks import render
+app, repo = create_app()
+price_fig, z_fig, cur, wow, avg = render(repo, "WTI_CRUDE", None, None)
+print(cur, wow.children, avg)                       # KPI strings
+print([t.name for t in price_fig.data])             # ['Price','Outlier','95% CI','Forecast']
+print(len(render(repo, "WTI_CRUDE", "2026-01-01", "2026-06-30")[0].data[0].x))  # fewer points
+repo.close()
+```
+
+### Confirm the HTTP layer (server must be running on :8050)
+```bash
+curl -s -o /dev/null -w "root: %{http_code}\n" http://127.0.0.1:8050/
+curl -s -o /dev/null -w "deps: %{http_code}\n" http://127.0.0.1:8050/_dash-dependencies
+```
+Both should return 200.
+
 ## Quick reference
 
 | Goal | Command |

@@ -95,7 +95,7 @@ It fetches from the EIA API, transforms and enriches the data, and upserts both
 the raw and processed tables, printing a summary of what changed.
 
 ```bash
-# Launch the dashboard (Chunk 7 — not yet built)
+# Launch the interactive dashboard at http://127.0.0.1:8050
 python -m dashboard.app
 ```
 
@@ -125,7 +125,7 @@ Built in independent chunks; each leaves the project runnable.
 - [x] **Chunk 4** — Storage layer (repository pattern)
 - [x] **Chunk 5** — Orchestration script
 - [x] **Chunk 6** — Forecasting module
-- [ ] **Chunk 7** — Plotly Dash dashboard
+- [x] **Chunk 7** — Plotly Dash dashboard
 - [ ] **Chunk 8** — Test suite
 - [ ] **Chunk 9** — Polish & documentation
 

@@ -640,3 +640,91 @@ otherwise, rather than producing a meaningless fit or crashing inside
 statsmodels. Predict/summary before fit raise `NotFittedError`.
 
 ---
+
+## Chunk 7 — Plotly Dash Dashboard
+
+### What was built
+- `dashboard/layout.py` — `build_layout()`: header, commodity dropdown,
+  date-range picker, three KPI cards, and two charts (dark theme, inline tokens).
+- `dashboard/callbacks.py` — pure builders (`compute_kpis`, `build_price_figure`,
+  `build_zscore_figure`) plus a testable `render()` and `register_callbacks()`.
+- `dashboard/app.py` — `create_app()` wiring layout + callbacks over the
+  repository; module-level `app`/`server` for `python -m dashboard.app` and WSGI.
+
+### Key ideas
+
+**1. Logic separated from the framework (testable UI).**
+The data→figure work lives in plain functions; `render()` returns the five
+outputs given a repo and selection, and the Dash callback is a one-line wrapper
+around it. So I unit-tested the entire interactive behavior — KPIs, traces, date
+filtering, empty selections — *without a browser*, then confirmed the real HTTP
+callback on top.
+
+**2. The reactive callback model.**
+Dash is declarative: a callback names its `Output`s and `Input`s, and the
+framework re-runs it whenever an input changes. One callback fans out to five
+outputs (two figures + three KPI cards) from three inputs (commodity + two
+dates). No manual event wiring or DOM manipulation.
+
+**3. Reusing the Strategy-pattern forecaster.**
+The chart calls the same `PriceForecaster().fit().predict()` from Chunk 6 and
+overlays the result. Because the forecaster's contract is fixed, the plotting
+code doesn't care which model produced the numbers.
+
+**4. Drawing a confidence band.**
+The 95% interval is one filled trace: x goes out along the upper bound and back
+along the lower (`x = [*dates, *dates[::-1]]`, `fill="toself"`). The forecast is
+anchored to the last actual point so the dashed line connects seamlessly.
+
+**5. Graceful degradation.**
+Forecasting is best-effort: if ARIMA can't fit, the page still renders the
+history (the forecast is just omitted). Empty selections produce on-theme
+"no data" figures and em-dash KPIs instead of crashing. The UI never white-screens.
+
+**6. Deployment-ready by construction.**
+Exposing `server = app.server` at module level means `gunicorn
+dashboard.app:server` works with no changes — the WSGI entry point a real
+deployment (Chunk 9 stretch / AWS) needs.
+
+### Mistakes & fixes
+- **`app.run_server` is gone in Dash 4.x.** My first instinct was the old
+  `run_server`, but Dash 4 *removes* it and raises `ObsoleteAttributeException`.
+  **Fix:** probed the installed API first, then used `app.run(...)`. Lesson:
+  verify the framework version's surface instead of trusting memory.
+- **Redundant `except (ValueError, Exception)`.** Tidied to `except Exception`
+  for the best-effort forecast.
+
+### Interview Q&A
+
+**Q: How do you test a dashboard without clicking around in a browser?**
+A: I keep the logic out of the framework. All the data-to-figure work is in pure
+functions, and a `render()` function returns the callback's outputs for a given
+selection. I unit-test that directly — asserting on trace names, KPI strings,
+and that date filters narrow the data. Then I separately confirm the HTTP layer
+by POSTing to Dash's `/_dash-update-component` endpoint, which exercises the real
+callback end to end.
+
+**Q: Explain Dash's callback model.**
+A: It's reactive and declarative. Each callback declares its `Output`s and
+`Input`s; when any input's value changes in the browser, Dash calls the function
+server-side and patches the outputs back into the page. I use one callback with
+five outputs driven by three inputs — selecting a commodity or changing the dates
+refreshes both charts and all three KPIs at once.
+
+**Q: How do you draw the forecast confidence interval?**
+A: As a single filled polygon — trace the upper bound left-to-right, then the
+lower bound right-to-left, and `fill="toself"`. I anchor it (and the forecast
+line) to the last observed point so it connects to the history cleanly.
+
+**Q: What happens if the forecast model fails, or there's no data in range?**
+A: It degrades gracefully. The forecast is wrapped in try/except — if it fails,
+the history still renders without an overlay. An empty selection returns a
+styled "no data" figure and em-dash KPIs. The page never crashes on bad input.
+
+**Q: How would you deploy this?**
+A: It's already WSGI-ready: I expose `server = app.server`, so
+`gunicorn dashboard.app:server` runs it behind a production server. From there
+it's a container or an EC2/Elastic Beanstalk instance, with the SQLite file (or,
+at scale, RDS Postgres via the same repository interface) behind it.
+
+---
