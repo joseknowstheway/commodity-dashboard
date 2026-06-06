@@ -18,6 +18,16 @@ each layer by hand.
 
 ---
 
+## Dashboard
+
+![Commodity Price Analytics dashboard](assets/dashboard.png)
+
+A commodity selector and date-range filter drive three KPI cards (current price,
+week-over-week change, 4-week average), a price chart with an ARIMA forecast and
+95% confidence band (outliers marked), and a color-coded z-score volatility chart.
+
+---
+
 ## Architecture
 
 ```
@@ -115,6 +125,80 @@ template.
 
 ---
 
+## Project Structure
+
+```
+commodity-dashboard/
+├── config.py               # dotenv-backed settings + EIA commodity catalog
+├── run_pipeline.py         # orchestration CLI (fetch → transform → store)
+├── ingestion/
+│   └── eia_client.py       # EIAClient: EIA v2 API client (retries, backoff)
+├── transform/
+│   └── pipeline.py         # CommodityPipeline: parse → clean → enrich
+├── storage/
+│   └── repository.py       # CommodityRepository: SQLite, repository pattern
+├── analytics/
+│   └── forecasting.py      # PriceForecaster (ARIMA) + LinearTrendForecaster
+├── dashboard/
+│   ├── layout.py           # Dash layout (controls, KPI cards, charts)
+│   ├── callbacks.py        # pure figure/KPI builders + render() + callbacks
+│   └── app.py              # Dash app entry point (WSGI-ready)
+├── tests/                  # pytest suite (32 tests, in-memory DB fixtures)
+├── scripts/
+│   └── capture_screenshot.py
+└── data/commodity.db       # SQLite database (git-ignored)
+```
+
+---
+
+## Design Decisions
+
+**Why the repository pattern?** All SQL lives in `CommodityRepository`; every
+other layer trades in DataFrames. The storage engine could move from SQLite to
+Postgres by rewriting one file — the pipeline, forecaster, and dashboard would
+not change. It also makes the rest of the codebase testable without a database.
+
+**Why SQLite over Postgres?** The project is a single-node analytics app with
+modest, append-mostly data. SQLite is zero-config, file-based, and bundled with
+Python — perfect for a portfolio app that should "clone and run." The repository
+abstraction keeps the door open to Postgres/RDS if scale ever demanded it.
+
+**Why separate `raw_prices` from `processed_prices`?** Raw observations are
+immutable facts (`INSERT OR IGNORE`); processed analytics are a derived view that
+is recomputed and overwritten (`ON CONFLICT DO UPDATE`). The orchestrator ingests
+raw incrementally, then rebuilds processed from the *full* raw history so
+rolling-window stats stay correct — a small lambda-architecture split.
+
+**Why ARIMA(1,1,1)?** Commodity prices are non-stationary, so the model needs one
+order of differencing (the middle `1`). A small, interpretable model is more
+defensible than an overfit one — the goal is to demonstrate time-series literacy,
+backed by AIC/BIC, not to win a forecasting contest.
+
+**Why EIA?** Free, no credit card, well-documented, and directly relevant to the
+energy sector. The client targets the current **v2** API (route + series facet),
+not the deprecated v1 series IDs.
+
+**Why Plotly Dash?** It pairs an interactive React front end with pure-Python
+callbacks, so the whole stack stays in one language. Keeping the data→figure
+logic in pure functions makes the UI unit-testable without a browser.
+
+---
+
+## Development
+
+```bash
+pip install -r requirements-dev.txt   # pytest, black, flake8
+
+pytest                # run the test suite (32 tests)
+black .               # auto-format
+flake8 .              # lint (config in .flake8)
+```
+
+Formatting (`black`) and linting (`flake8`) pass cleanly across the codebase, and
+the full test suite runs offline in ~1.3s.
+
+---
+
 ## Project Status
 
 Built in independent chunks; each leaves the project runnable.
@@ -127,7 +211,9 @@ Built in independent chunks; each leaves the project runnable.
 - [x] **Chunk 6** — Forecasting module
 - [x] **Chunk 7** — Plotly Dash dashboard
 - [x] **Chunk 8** — Test suite
-- [ ] **Chunk 9** — Polish & documentation
+- [x] **Chunk 9** — Polish & documentation
+
+Tagged **`v1.0.0`**.
 
 ---
 

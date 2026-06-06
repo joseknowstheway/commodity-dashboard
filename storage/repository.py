@@ -87,6 +87,7 @@ class CommodityRepository:
     """
 
     def __init__(self, db_path: str | Path) -> None:
+        """Open the connection and ensure the schema exists."""
         self.db_path = str(db_path)
         # A single connection shared across the app needs check_same_thread off
         # (the Dash dashboard runs callbacks on worker threads). Writes are
@@ -115,9 +116,11 @@ class CommodityRepository:
         self._conn.close()
 
     def __enter__(self) -> "CommodityRepository":
+        """Enter the runtime context, returning the repository."""
         return self
 
     def __exit__(self, *exc) -> None:
+        """Exit the runtime context, closing the connection."""
         self.close()
 
     # ------------------------------------------------------------------ #

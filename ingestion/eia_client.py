@@ -70,6 +70,7 @@ class EIAClient:
         backoff_factor: float = 0.5,
         session: requests.Session | None = None,
     ) -> None:
+        """Initialize the client (see class docstring for argument details)."""
         if not api_key:
             raise ValueError("EIAClient requires a non-empty api_key.")
         self.api_key = api_key

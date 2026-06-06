@@ -399,6 +399,28 @@ pytest --no-header -rN                 # compact
 All tests are offline and deterministic (in-memory DB, seeded data) — no API key
 or network required.
 
+## Chunk 9 — Polish
+
+### Verify the whole thing is clean
+```bash
+black --check .      # formatting
+flake8 .             # linting
+pytest -q            # 32 tests
+```
+
+### Regenerate the dashboard screenshot (optional)
+```bash
+pip install playwright && python -m playwright install chromium
+python run_pipeline.py --refresh     # ensure data exists
+python scripts/capture_screenshot.py # writes assets/dashboard.png
+```
+
+### Confirm the release tag
+```bash
+git tag                # should list v1.0.0
+git show v1.0.0 --stat
+```
+
 ## Quick reference
 
 | Goal | Command |

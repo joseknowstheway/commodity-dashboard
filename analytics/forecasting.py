@@ -48,6 +48,7 @@ class PriceForecaster:
     """
 
     def __init__(self, order: tuple[int, int, int] = (1, 1, 1)) -> None:
+        """Initialize with an ARIMA order (see class docstring)."""
         self.order = order
         self._results = None
         self._last_date: pd.Timestamp | None = None
@@ -154,6 +155,7 @@ class LinearTrendForecaster:
     """
 
     def __init__(self) -> None:
+        """Initialize an unfitted linear-trend forecaster."""
         self._model: LinearRegression | None = None
         self._n: int = 0
         self._resid_std: float = 0.0
