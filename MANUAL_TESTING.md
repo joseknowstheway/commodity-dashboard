@@ -167,6 +167,64 @@ with patch("ingestion.eia_client.time.sleep"):
 
 ---
 
+## Chunk 3 — Transformation pipeline
+
+### Fast path — live smoke test
+Fetch + transform the default commodity and print the enriched tail:
+```bash
+python -m transform.pipeline
+```
+Expect a table with `value, is_outlier, pct_change, rolling_avg_4w,
+rolling_std_4w, z_score`. The first 3 rolling values are NaN (warm-up).
+
+### Verify the math on known numbers (REPL)
+```python
+import pandas as pd
+from transform.pipeline import CommodityPipeline
+p = CommodityPipeline()
+
+# Four values, each +10%
+df = pd.DataFrame({"series_id":"T",
+                   "date":pd.date_range("2024-01-01",periods=4,freq="W"),
+                   "value":[100.0,110.0,121.0,133.1]})
+e = p.enrich(p.clean(df))
+print(e[["value","pct_change","rolling_avg_4w","z_score"]])
+# pct_change -> [NaN, 10, 10, 10];  rolling_avg_4w last -> 116.025
+```
+
+### Verify outlier detection is *local* (the Hampel filter)
+```python
+import numpy as np, pandas as pd
+from transform.pipeline import CommodityPipeline
+p = CommodityPipeline()
+
+# Smooth trend + ONE injected spike at index 20 -> flags exactly [20]
+vals = list(np.linspace(50,70,40)); vals[20] = 200.0
+df = pd.DataFrame({"series_id":"T","date":pd.date_range("2024-01-01",periods=40,freq="W"),"value":vals})
+print("spike flagged at:", list(p.clean(df).index[p.clean(df)["is_outlier"]]))   # [20]
+
+# Sustained regime shift (50s -> 100s) -> flags 0 (a global detector would flag ~7)
+vals3 = [50,51,49,50,52,48,51]+[100,101,99,100,102,98,101]
+df3 = pd.DataFrame({"series_id":"T","date":pd.date_range("2024-01-01",periods=14,freq="W"),"value":vals3})
+print("regime-shift outliers:", int(p.clean(df3)["is_outlier"].sum()))           # 0
+```
+
+### Verify defensive handling (bad values, dupes, empty)
+```python
+from transform.pipeline import CommodityPipeline
+p = CommodityPipeline()
+raw = {"response":{"data":[
+    {"period":"2024-01-07","value":"100.0"},
+    {"period":"2024-01-14","value":"bad"},      # unparseable -> dropped
+    {"period":"2024-01-21","value":"120.0"},
+    {"period":"2024-01-07","value":"105.0"},     # duplicate date -> keep last
+]}}
+r = p.clean(p.parse_raw(raw,"T"))
+print(len(r), list(r["date"].dt.date.astype(str)), list(r["value"]))  # 2 rows; 01-07=105.0, 01-21=120.0
+
+print(p.run({}, "T").shape)   # (0, 8) -> empty but correctly-shaped, never crashes
+```
+
 ## Quick reference
 
 | Goal | Command |

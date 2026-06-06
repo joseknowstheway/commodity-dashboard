@@ -247,3 +247,105 @@ ever exceeds the requested `length`. To scale, I'd loop on the `offset`
 parameter, accumulating pages until I've fetched `total` rows.
 
 ---
+
+## Chunk 3 — Transformation Pipeline
+
+### What was built
+- `transform/pipeline.py` with `CommodityPipeline`, a **stateless** transformer:
+  - `parse_raw(raw_json, series_id)` — pulls `(date, value)` out of the EIA
+    payload into a `[series_id, date, value]` DataFrame.
+  - `clean(df)` — casts types, drops nulls, sorts, de-duplicates by date, and
+    adds a robust `is_outlier` flag.
+  - `enrich(df)` — adds `pct_change`, `rolling_avg_4w`, `rolling_std_4w`,
+    `z_score`.
+  - `run(raw_json, series_id)` — composes the three.
+- A `__main__` smoke test that fetches live and prints the enriched tail.
+
+### Key ideas
+
+**1. Pure functions = testable functions.**
+Every method takes input and returns a *new* DataFrame (`df.copy()`), never
+mutating its argument or shared state. Purity means each step can be unit-tested
+with a hand-built DataFrame and a known expected output — no network, no DB, no
+ordering dependencies. This is the single biggest reason the pipeline is split
+into `parse_raw` / `clean` / `enrich` instead of one big function.
+
+**2. Separation of parsing from cleaning.**
+`parse_raw` deliberately leaves `value`/`date` as raw strings; `clean` owns all
+type-casting (`pd.to_numeric(..., errors="coerce")`, `pd.to_datetime`). One
+responsibility per method.
+
+**3. Coerce, then drop — graceful handling of bad data.**
+`errors="coerce"` turns unparseable values into `NaN` instead of throwing, then
+`dropna` removes them. A single malformed row can't crash the run.
+
+**4. Idempotent, ordered output.**
+`clean` sorts ascending by date and drops duplicate `(series_id, date)` pairs
+keeping the last — so re-running on overlapping data yields a stable, correctly
+ordered series (which the rolling windows depend on).
+
+**5. Rolling analytics and the NaN "warm-up".**
+`rolling(window=4)` means the first 3 rows are `NaN` — there isn't enough history
+to compute a 4-week stat. That's correct, not a bug; downstream code (storage,
+charts) must tolerate leading NaNs. `z_score` standardizes each price against
+its trailing window: `(value - rolling_mean) / rolling_std`.
+
+**6. Empty input returns an empty *correctly-shaped* frame.**
+`run({})` yields 0 rows but all 8 columns. Downstream code can always assume the
+schema exists and never special-cases `None`.
+
+### Mistakes & fixes
+- **Outlier detector flagged an entire price *regime*, not anomalies.** My first
+  `_flag_outliers` used a **global** median/MAD modified z-score. On real data it
+  flagged 12/74 WTI points — the whole recent high-price stretch — because the
+  global median sat down at the old price level (~$65) while prices had trended
+  up to ~$100. A global robust statistic still can't tell "new sustained level"
+  from "anomaly" on a trending series.
+  **Fix:** switched to a **Hampel filter** — a *centered rolling* median/MAD, so
+  each point is judged against its **local neighbors**. I verified the fix with
+  controlled cases: a smooth trend with one injected spike flags *exactly* the
+  spike; a pure trend flags nothing; a sustained regime shift flags nothing
+  (the global version would have flagged ~7). Lesson: for time series, outlier
+  detection must be **local**.
+- **`black` reflowed long log/lines and the constants block.** Ran `black`;
+  adopted its formatting.
+
+### Interview Q&A
+
+**Q: Why split the transform into parse/clean/enrich instead of one function?**
+A: Single responsibility and testability. Each method is pure — input in, new
+DataFrame out — so I can unit-test `enrich`'s math on a 4-row hand-built frame
+without any API or DB. It also makes failures localizable: if a number's wrong,
+I know which stage to look at.
+
+**Q: How do you handle a bad/non-numeric value from the API?**
+A: `pd.to_numeric(..., errors="coerce")` turns it into `NaN` rather than raising,
+then `dropna(subset=["date","value"])` removes it and I log the drop count.
+Defensive parsing — one bad row never aborts the batch.
+
+**Q: Why are the first few rows of the rolling columns NaN?**
+A: A 4-week rolling stat needs 4 observations; the first 3 rows don't have
+enough history, so pandas returns NaN. It's mathematically correct. I make sure
+storage and the charts tolerate leading NaNs.
+
+**Q: Walk me through your outlier detection — and why MAD instead of mean/std?**
+A: I use a Hampel filter: a centered rolling window, flagging points more than
+3.5 robust sigmas from the local median, scaled by the window's MAD (×1.4826).
+MAD (median absolute deviation) is robust — unlike mean/std it isn't dragged
+around by the very outliers it's trying to detect. And it's *local* (rolling),
+because commodity prices trend; a global detector would flag an entire sustained
+price move as outliers. I confirmed that on real data and switched approaches.
+
+**Q: Your outliers are flagged but not removed — why?**
+A: Removing real (if extreme) market moves would distort the analytics and the
+chart. Flagging lets the dashboard highlight them while keeping the series
+intact. The flag is information, not a filter.
+
+**Q: How is `z_score` different from the `is_outlier` flag?**
+A: `z_score` (in `enrich`) measures deviation from a short *trailing* 4-week
+window using mean/std — it's a directional, real-time-friendly volatility signal
+for the chart. `is_outlier` (in `clean`) is a robust, *centered* Hampel flag for
+offline data-quality detection. Different windows, different statistics,
+different purposes.
+
+---
