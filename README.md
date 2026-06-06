@@ -126,7 +126,7 @@ Built in independent chunks; each leaves the project runnable.
 - [x] **Chunk 5** — Orchestration script
 - [x] **Chunk 6** — Forecasting module
 - [x] **Chunk 7** — Plotly Dash dashboard
-- [ ] **Chunk 8** — Test suite
+- [x] **Chunk 8** — Test suite
 - [ ] **Chunk 9** — Polish & documentation
 
 ---

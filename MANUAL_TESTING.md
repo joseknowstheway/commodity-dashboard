@@ -380,6 +380,25 @@ curl -s -o /dev/null -w "deps: %{http_code}\n" http://127.0.0.1:8050/_dash-depen
 ```
 Both should return 200.
 
+## Chunk 8 — Test suite (pytest)
+
+### Run everything
+```bash
+pip install -r requirements-dev.txt   # if not already
+pytest                                 # 32 tests, ~1.3s
+```
+
+### Useful invocations
+```bash
+pytest -q                              # quiet summary
+pytest tests/test_pipeline.py          # one file
+pytest -k outlier                      # only tests matching "outlier"
+pytest -x                              # stop at first failure
+pytest --no-header -rN                 # compact
+```
+All tests are offline and deterministic (in-memory DB, seeded data) — no API key
+or network required.
+
 ## Quick reference
 
 | Goal | Command |

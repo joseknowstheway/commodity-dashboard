@@ -728,3 +728,91 @@ it's a container or an EC2/Elastic Beanstalk instance, with the SQLite file (or,
 at scale, RDS Postgres via the same repository interface) behind it.
 
 ---
+
+## Chunk 8 — Test Suite
+
+### What was built
+- `tests/conftest.py` — shared fixtures: an in-memory `repo`, a `pipeline`, an
+  EIA-shaped `raw_json`, and hand-checkable DataFrames (`known_prices`,
+  `trending_series`, `enriched_with_nans`).
+- `tests/test_pipeline.py` (12), `tests/test_repository.py` (11),
+  `tests/test_forecasting.py` (9) — **32 tests, all passing in ~1.3s**.
+
+### Key ideas
+
+**1. Fixtures = reusable, isolated setup.**
+`conftest.py` fixtures are injected by name into any test. The `repo` fixture
+yields a fresh `":memory:"` database and closes it afterward, so every test gets
+a clean, isolated DB with zero shared state and no temp files to clean up.
+
+**2. In-memory SQLite makes DB tests fast and hermetic.**
+Each test spins up a real SQLite database entirely in RAM — real SQL, real
+constraints, real upserts — but with no disk I/O and nothing to tear down. This
+is exactly the design decision from Chunk 4 (a single persistent connection)
+paying off: `":memory:"` only works because the connection is long-lived.
+
+**3. Known-value testing.**
+The `known_prices` fixture is four prices each +10%, so the expected
+`pct_change` is `[NaN, 10, 10, 10]` and the rolling mean is hand-computable. The
+z-score test recomputes the expectation with NumPy (matching pandas' `ddof=1`)
+rather than hard-coding a magic number — the assertion explains itself.
+
+**4. Test behavior, not implementation.**
+The outlier tests assert *outcomes* ("a lone spike is flagged; a regime shift is
+not"), not the internals of the Hampel filter. That means I can change the
+detection method later without rewriting the tests, as long as the behavior holds.
+
+**5. Test the unhappy paths too.**
+`pytest.raises` covers the error contract: short series → `ValueError`,
+predict-before-fit → `NotFittedError`, bad values dropped, empty inputs are
+no-ops. Bugs love edge cases, so the edges get explicit tests.
+
+**6. Deterministic by construction.**
+The trending series is seeded (`np.random.default_rng(42)`), so forecasting tests
+give identical results every run — no flaky CI.
+
+**7. Purity paid off.**
+Because the pipeline and forecaster are pure (input → output, no hidden state),
+most tests are a one-line call and an assertion — no mocking, no setup. The
+architecture made the tests easy, which is the point.
+
+### Mistakes & fixes
+- **Stray bottom-of-file import.** I first tucked `import pytest` at the end of
+  `test_pipeline.py` (used by `pytest.approx`). It technically works but is
+  confusing and trips `E402`. **Fix:** moved it to the top with the other
+  imports.
+- **Top-level package imports under pytest.** Tests import `config`, `transform`,
+  etc. Because `tests/` is a package (`__init__.py`) and the project root has
+  none, pytest inserts the project root onto `sys.path` automatically — so the
+  imports resolve with no `conftest` path hacks.
+
+### Interview Q&A
+
+**Q: How are your tests structured, and why fixtures?**
+A: Arrange-Act-Assert, with shared setup in `conftest.py` fixtures injected by
+name. Fixtures keep tests DRY and isolated — the `repo` fixture hands each test a
+fresh in-memory database and tears it down afterward, so tests never leak state
+into each other.
+
+**Q: Why an in-memory database instead of mocking the DB?**
+A: I'd rather test against the real thing than a mock that can drift from
+reality. `":memory:"` SQLite runs the actual schema, constraints, and upsert SQL
+with no disk I/O — I get real confidence and millisecond speed. Mocking the
+database would only test that I called the mock, not that my SQL is correct.
+
+**Q: How do you avoid flaky tests with a statistical model?**
+A: Determinism. The synthetic series is seeded, so ARIMA fits the same data every
+run. And I assert on structural properties — step count, interval ordering,
+interval widening — rather than exact forecast values, which are model-internal.
+
+**Q: How do you test that a function doesn't have side effects?**
+A: I snapshot the input, run the function, and assert the input is unchanged with
+`assert_frame_equal`. That's `test_methods_do_not_mutate_input` — it pins down the
+pipeline's purity guarantee.
+
+**Q: What's your philosophy on what to assert?**
+A: Behavior over implementation. The outlier tests check that a spike is flagged
+and a regime shift isn't — not how the Hampel filter computes it. That keeps the
+tests stable across refactors and documents the *intent* of the code.
+
+---
