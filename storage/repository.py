@@ -214,6 +214,32 @@ class CommodityRepository:
             df["is_outlier"] = df["is_outlier"].astype("boolean")
         return df
 
+    def get_raw(
+        self,
+        series_id: str,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> pd.DataFrame:
+        """Return raw observations for a series as a DataFrame, ordered by date.
+
+        The orchestrator reads the *full* raw history back out and recomputes the
+        processed analytics over it, so rolling-window stats stay correct even
+        when raw data was ingested incrementally.
+        """
+        query = "SELECT series_id, date, value FROM raw_prices WHERE series_id = ?"
+        params: list = [series_id]
+        if start_date:
+            query += " AND date >= ?"
+            params.append(start_date)
+        if end_date:
+            query += " AND date <= ?"
+            params.append(end_date)
+        query += " ORDER BY date ASC"
+        with self._lock:
+            return pd.read_sql_query(
+                query, self._conn, params=params, parse_dates=["date"]
+            )
+
     def get_latest_date(self, series_id: str) -> str | None:
         """Return the most recent ingested date for a series, or None if empty.
 

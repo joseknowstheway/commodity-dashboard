@@ -454,3 +454,90 @@ chronologically, so `WHERE date >= ?` range filters work directly without
 conversion.
 
 ---
+
+## Chunk 5 — Orchestration Script
+
+### What was built
+- `run_pipeline.py` at the project root — the single command that wires Chunks
+  2–4 into an end-to-end run: **fetch → upsert raw → recompute processed → upsert**.
+- An `argparse` CLI: `--series` (one or more catalog keys, validated),
+  `--start`, `--end`, `--refresh`.
+- Incremental loading by default via `get_latest_date`; `--refresh` forces a
+  full re-fetch.
+- A per-series summary table (fetched / new raw / processed / status) plus totals
+  and elapsed time. Returns a non-zero exit code only if *every* series failed.
+
+### Key ideas
+
+**1. Orchestration is composition, not logic.**
+The script owns *no* business logic — it instantiates the client, pipeline, and
+repository and sequences them. All the real work lives in the tested layers. The
+orchestrator just decides *what runs in what order* and reports the outcome.
+
+**2. Raw is the source of truth; processed is a derived view.**
+The pivotal design choice: ingest raw incrementally (cheap, idempotent), then
+read the **entire** raw history back from the DB and recompute the processed
+table over all of it. This is a mini *lambda architecture*. Why? Rolling-window
+analytics need contiguous history — recomputing only a small incremental batch
+would produce wrong 4-week means and z-scores at the batch boundary. You can see
+this in action: a run that fetched a 26-row window still wrote 104 processed rows
+because the derived view is always rebuilt in full.
+
+**3. Incremental fetch with a deliberate one-period overlap.**
+By default the fetch starts at the latest stored date (not the day after), so an
+upstream *revision* to the most recent point is caught. `INSERT OR IGNORE` makes
+the overlap a harmless no-op. `--refresh` bypasses this and re-fetches the whole
+window.
+
+**4. Resilience: one bad series doesn't sink the run.**
+A fetch failure is caught per series, recorded as `fetch-failed`, and the loop
+continues. The exit code is non-zero only if *all* series failed — useful for
+cron/CI to distinguish "partial" from "total" failure.
+
+**5. A real CLI, validated for free.**
+`argparse` with `choices=list(COMMODITIES)` rejects typos (`--series BOGUS`) with
+a helpful message before any work runs — input validation at the boundary.
+
+**6. Observability: a summary you can read at a glance.**
+The run prints a table (fetched / new / processed / status) and total elapsed
+time, so the operator immediately sees what changed without digging through logs.
+
+### Mistakes & fixes
+- **The incremental-vs-correctness trap.** My first instinct was to enrich only
+  the freshly fetched rows and store them — but incremental batches don't have
+  enough trailing history, so the rolling stats at the batch edge would be wrong.
+  **Fix:** separate ingestion from derivation — ingest raw incrementally, then
+  recompute processed from the *full* raw history (added `get_raw` to the
+  repository to support this).
+- **black reflowed the summary f-strings.** Ran `black`; adopted it.
+
+### Interview Q&A
+
+**Q: How does your pipeline avoid re-downloading all the data every run?**
+A: The repository exposes `get_latest_date(series_id)`. On a normal run I start
+the fetch at that date (with a one-period overlap to catch revisions), so I only
+pull what's new. `INSERT OR IGNORE` makes re-seeing existing rows a no-op.
+`--refresh` overrides this to re-fetch the whole window.
+
+**Q: If you fetch incrementally, how do the rolling-window stats stay correct?**
+A: I don't compute analytics on the incremental batch. I ingest raw
+incrementally, then read the *entire* raw series back and recompute the processed
+table over all of it. Raw is the immutable source of truth; processed is a
+derived view I can always rebuild. It's a small lambda-architecture split.
+
+**Q: What happens if one commodity's API call fails mid-run?**
+A: It's caught per series, marked `fetch-failed`, and the run continues with the
+others. The process exits non-zero only if every series failed, so an automated
+scheduler can tell a partial failure from a total one.
+
+**Q: Why argparse instead of reading `sys.argv` yourself?**
+A: It gives me typed flags, defaults, `--help`, and validation (`choices=`) for
+free, and rejects bad input before any side effects. It's the standard library's
+job — no reason to hand-roll it.
+
+**Q: Is the script idempotent? What if I run it twice?**
+A: Yes. The second run fetches the small overlap, inserts 0 new raw rows, and
+(unless `--refresh`) skips the processed recompute — reporting `up-to-date`. No
+duplicates, no wasted work. I verified this end-to-end.
+
+---

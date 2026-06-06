@@ -271,6 +271,41 @@ sqlite3 data/commodity.db "SELECT series_id, COUNT(*) FROM processed_prices GROU
 sqlite3 data/commodity.db "SELECT * FROM processed_prices ORDER BY date DESC LIMIT 5;"
 ```
 
+## Chunk 5 — Orchestration (run_pipeline.py)
+
+This is the command that creates and populates the real `data/commodity.db`.
+
+### Full run (first time / force refresh)
+```bash
+python run_pipeline.py --refresh
+```
+Expect a summary table with ~104 rows per commodity under FETCHED / NEW RAW /
+PROCESSED, all status `ok`.
+
+### Incremental run (idempotency)
+```bash
+python run_pipeline.py
+```
+Run it again immediately: expect NEW RAW = 0 and status `up-to-date` for every
+series (it only fetches the small overlap, inserts nothing, skips recompute).
+
+### Useful flags
+```bash
+python run_pipeline.py --series WTI_CRUDE                       # one commodity
+python run_pipeline.py --series WTI_CRUDE NATURAL_GAS           # a subset
+python run_pipeline.py --start 2024-01-01 --end 2024-12-31      # explicit window
+python run_pipeline.py --series BOGUS                           # -> argparse error
+python run_pipeline.py --help                                  # full CLI help
+```
+
+### Inspect the resulting database
+```bash
+sqlite3 data/commodity.db ".tables"
+sqlite3 data/commodity.db "SELECT series_id, COUNT(*), MIN(date), MAX(date) FROM raw_prices GROUP BY series_id;"
+# warm-up rows should have NULL rolling stats; later rows populated:
+sqlite3 -header -column data/commodity.db "SELECT date, value, rolling_avg_4w, z_score FROM processed_prices WHERE series_id='RWTC' ORDER BY date LIMIT 5;"
+```
+
 ## Quick reference
 
 | Goal | Command |

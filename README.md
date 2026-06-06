@@ -81,14 +81,21 @@ cp .env.example .env
 
 ## Usage
 
-> The pipeline and dashboard are built in later chunks. This section will be
-> expanded as those land.
+Populate the database end-to-end with the orchestration script:
 
 ```bash
-# Populate the database end-to-end (Chunk 5)
-python run_pipeline.py
+python run_pipeline.py                      # all commodities, incremental
+python run_pipeline.py --refresh            # force a full re-fetch
+python run_pipeline.py --series WTI_CRUDE   # a single commodity
+python run_pipeline.py --start 2024-01-01 --end 2024-12-31
+python run_pipeline.py --help               # full CLI reference
+```
 
-# Launch the dashboard (Chunk 7)
+It fetches from the EIA API, transforms and enriches the data, and upserts both
+the raw and processed tables, printing a summary of what changed.
+
+```bash
+# Launch the dashboard (Chunk 7 — not yet built)
 python -m dashboard.app
 ```
 
@@ -116,7 +123,7 @@ Built in independent chunks; each leaves the project runnable.
 - [x] **Chunk 2** — Ingestion layer (EIA API client)
 - [x] **Chunk 3** — Transformation pipeline
 - [x] **Chunk 4** — Storage layer (repository pattern)
-- [ ] **Chunk 5** — Orchestration script
+- [x] **Chunk 5** — Orchestration script
 - [ ] **Chunk 6** — Forecasting module
 - [ ] **Chunk 7** — Plotly Dash dashboard
 - [ ] **Chunk 8** — Test suite
