@@ -225,6 +225,52 @@ print(len(r), list(r["date"].dt.date.astype(str)), list(r["value"]))  # 2 rows; 
 print(p.run({}, "T").shape)   # (0, 8) -> empty but correctly-shaped, never crashes
 ```
 
+## Chunk 4 — Storage (repository pattern)
+
+### Fast path — live smoke test (in-memory DB)
+Runs fetch -> transform -> store -> read, and shows idempotency:
+```bash
+python -m storage.repository
+```
+Expect: `raw inserted: 74`, then on the second write `raw inserted: 0`
+(idempotent), and a `get_processed` table at the end.
+
+### Verify the core guarantees (REPL)
+```python
+import numpy as np, pandas as pd
+from storage.repository import CommodityRepository
+repo = CommodityRepository(":memory:")
+
+df = pd.DataFrame({"series_id":"T","date":pd.date_range("2024-01-07",periods=5,freq="W"),
+    "value":[100.,110.,121.,133.1,146.4],
+    "pct_change":[np.nan,10,10,10,10],
+    "rolling_avg_4w":[np.nan,np.nan,np.nan,116.025,127.6],
+    "rolling_std_4w":[np.nan,np.nan,np.nan,14.25,15.6],
+    "z_score":[np.nan,np.nan,np.nan,1.198,1.2],
+    "is_outlier":[False,False,True,False,False]})
+repo.upsert_processed(df,"T")
+
+# NaN -> NULL for warm-up rows
+print(repo._conn.execute("SELECT pct_change FROM processed_prices WHERE date='2024-01-07'").fetchone()[0])  # None
+
+# Real upsert: rewrite with changed values -> overwrites, no dupes
+df2 = df.copy(); df2["value"] += 1000
+repo.upsert_processed(df2,"T")
+got = repo.get_processed("T")
+print(len(got), got["value"].iloc[0])      # 5  1100.0  (updated, not duplicated)
+
+# Date-range read + latest date
+print(len(repo.get_processed("T", start_date="2024-01-21")))   # 3
+print(repo.get_latest_date("T"))                                # 2024-02-04
+```
+
+### Inspect the real database file (after running Chunk 5's pipeline)
+```bash
+sqlite3 data/commodity.db ".tables"
+sqlite3 data/commodity.db "SELECT series_id, COUNT(*) FROM processed_prices GROUP BY series_id;"
+sqlite3 data/commodity.db "SELECT * FROM processed_prices ORDER BY date DESC LIMIT 5;"
+```
+
 ## Quick reference
 
 | Goal | Command |

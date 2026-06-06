@@ -349,3 +349,108 @@ offline data-quality detection. Different windows, different statistics,
 different purposes.
 
 ---
+
+## Chunk 4 — Storage Layer (Repository Pattern)
+
+### What was built
+- `storage/repository.py` with `CommodityRepository`:
+  - `__init__` opens a connection and calls `_initialize_schema()`.
+  - `upsert_raw(df, series_id)` — idempotent `INSERT OR IGNORE`; returns count added.
+  - `upsert_processed(df, series_id)` — true upsert via `ON CONFLICT DO UPDATE`.
+  - `get_processed(series_id, start, end)` — returns an ordered DataFrame.
+  - `get_latest_date(series_id)` — newest stored date (drives incremental fetch).
+  - Context-manager support (`with CommodityRepository(...) as repo:`) + `close()`.
+- Schema for `raw_prices` and `processed_prices` (+ a `is_outlier` column and
+  helpful indexes), created idempotently with `CREATE TABLE IF NOT EXISTS`.
+
+### Key ideas
+
+**1. The Repository pattern = one place that knows SQL.**
+Every other layer receives/returns plain DataFrames and never sees a query. The
+payoff: swapping SQLite for Postgres means rewriting *this one file* — the
+pipeline and dashboard don't change. That's decoupling you can demo.
+
+**2. Idempotency, two different ways — and why.**
+`raw_prices` uses `INSERT OR IGNORE`: raw observations are immutable facts, so a
+re-run is a silent no-op (proven: 74 inserted, then 0). `processed_prices` uses
+`ON CONFLICT(series_id, date) DO UPDATE`: derived analytics *change* when
+recomputed (revised prices, shifted rolling windows), so a re-run must
+*overwrite*. Same goal (no duplicates), opposite conflict policy, for principled
+reasons.
+
+**3. The UNIQUE constraint is what makes upserts possible.**
+`UNIQUE(series_id, date)` is the key both conflict strategies hinge on. Without
+it, "insert or ignore/update on duplicate" has no notion of "duplicate."
+
+**4. Transactions via the connection context manager.**
+`with self._conn:` begins a transaction that commits on success and rolls back
+on exception — so a mid-batch failure can't leave half-written data. Writes are
+wrapped this way; the repo itself is also a context manager for connection
+lifecycle.
+
+**5. Thread-safety for the dashboard.**
+Dash runs callbacks on worker threads, and a SQLite `Connection` isn't usable
+across threads by default. I open with `check_same_thread=False` and serialize
+writes with a `threading.Lock`. Verified with 8 concurrent writers: no errors,
+correct final row count.
+
+**6. The pandas ↔ SQLite impedance mismatch.**
+`_to_records` handles three gaps: tag every row with `series_id`; normalize
+`date` to an ISO string (which sorts chronologically as TEXT, so range queries
+work); and convert pandas `NaN`/`NA` to Python `None` so warm-up rows become SQL
+`NULL`, not the string `'nan'`. Verified the leading rolling-window rows store as
+NULL.
+
+**7. `get_latest_date` enables incremental loads.**
+Returning the newest stored date lets the orchestrator (Chunk 5) fetch only
+what's missing instead of re-downloading all history every run.
+
+### Mistakes & fixes
+- **`:memory:` vs connection-per-operation.** I considered opening a fresh
+  connection per call (clean and thread-safe), but each new connection to
+  `":memory:"` gets its *own empty database* — which would break the in-memory
+  test DB the suite relies on. **Fix:** a single long-lived connection
+  (`check_same_thread=False` + a write lock), which works for both file and
+  in-memory databases and across Dash threads.
+- **black wrapped a long SQL string / log line.** Ran `black`; adopted it.
+
+### Interview Q&A
+
+**Q: What is the Repository pattern and why use it here?**
+A: It's an abstraction that isolates all data-access logic behind a collection-
+like interface. Here, `CommodityRepository` is the only code that touches SQL;
+everything else trades in DataFrames. That decouples business logic from storage
+— I could move to Postgres/RDS by rewriting one file, and I can unit-test other
+layers without a database.
+
+**Q: How do you make writes idempotent, and why two strategies?**
+A: A `UNIQUE(series_id, date)` constraint plus a conflict policy. Raw data uses
+`INSERT OR IGNORE` because observations are immutable — re-running shouldn't
+change anything. Processed data uses `ON CONFLICT DO UPDATE` because recomputed
+analytics legitimately change and should overwrite. Both prevent duplicates;
+they differ on what "already exists" should mean.
+
+**Q: How do you handle transactions and partial failures?**
+A: I wrap writes in `with self._conn:`, SQLite's transaction context manager. It
+commits if the block succeeds and rolls back on any exception, so a batch either
+lands fully or not at all — no half-written state.
+
+**Q: Is your repository safe to use from the Dash dashboard's threads?**
+A: Yes. SQLite connections default to single-thread use, so I set
+`check_same_thread=False` and guard writes with a `threading.Lock`. I verified
+with 8 concurrent writer threads — zero errors and the expected row count. For a
+file DB I also enable WAL for better read/write concurrency.
+
+**Q: How do pandas NaNs end up in the database?**
+A: As SQL `NULL`. In `_to_records` I convert `NaN`/`NA` to Python `None` before
+`executemany`, otherwise they could land as the literal string `'nan'`. The
+leading rolling-window warm-up rows are the real-world case, and I confirmed they
+store as NULL and read back as NaN.
+
+**Q: Why store dates as TEXT instead of a date type?**
+A: SQLite has no native date type — it stores dates as TEXT, REAL, or INTEGER. I
+use ISO-8601 TEXT (`YYYY-MM-DD`), which sorts lexicographically identically to
+chronologically, so `WHERE date >= ?` range filters work directly without
+conversion.
+
+---

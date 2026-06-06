@@ -115,7 +115,7 @@ Built in independent chunks; each leaves the project runnable.
 - [x] **Chunk 1** — Project setup & configuration
 - [x] **Chunk 2** — Ingestion layer (EIA API client)
 - [x] **Chunk 3** — Transformation pipeline
-- [ ] **Chunk 4** — Storage layer (repository pattern)
+- [x] **Chunk 4** — Storage layer (repository pattern)
 - [ ] **Chunk 5** — Orchestration script
 - [ ] **Chunk 6** — Forecasting module
 - [ ] **Chunk 7** — Plotly Dash dashboard
