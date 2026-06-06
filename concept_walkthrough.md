@@ -541,3 +541,102 @@ A: Yes. The second run fetches the small overlap, inserts 0 new raw rows, and
 duplicates, no wasted work. I verified this end-to-end.
 
 ---
+
+## Chunk 6 — Forecasting Module
+
+### What was built
+- `analytics/forecasting.py` with:
+  - `PriceForecaster` — a statsmodels **ARIMA(1,1,1)** wrapper:
+    `fit(df)` → `predict(steps=8)` (date, forecast, lower, upper) → `summary()`.
+  - `LinearTrendForecaster` — a scikit-learn OLS trend baseline with the same
+    output contract, for comparison.
+  - `NotFittedError` for predict/summary-before-fit.
+
+### Key ideas
+
+**1. Why ARIMA(1,1,1) — and why deliberately simple.**
+ARIMA = AutoRegressive (p) Integrated (d) Moving-Average (q).
+  * **AR(1)**: tomorrow depends on today (one lag).
+  * **I(1)**: one order of *differencing*. Commodity prices are *non-stationary*
+    (they trend and wander); modeling the week-to-week *change* instead of the
+    raw level makes the series stationary, which ARIMA requires. The middle `1`
+    is the whole reason this works on prices.
+  * **MA(1)**: one lag of the forecast error.
+A small model is *more defensible* than an overfit one — it won't memorize noise,
+and I can explain every term. The goal is to demonstrate time-series literacy,
+not to win a forecasting competition.
+
+**2. Confidence intervals that widen with the horizon.**
+`predict` returns 95% CI bounds (`alpha=0.05`), and the interval *grows* the
+further out you forecast — because uncertainty compounds with each step. I
+verified width is non-decreasing across the horizon (≈±4.6 at step 1, ≈±11.6 at
+step 8). A forecast without an interval is a guess pretending to be a fact.
+
+**3. A fluent, predictable interface.**
+`fit` returns `self`, so `PriceForecaster().fit(df).predict()` chains. Both
+forecasters share the exact same output columns (`date, forecast, lower, upper`),
+so the dashboard can swap models without changing any plotting code — the
+**Strategy pattern** in miniature.
+
+**4. Fail loudly on misuse.**
+`predict()`/`summary()` before `fit()` raise `NotFittedError` (mirroring
+scikit-learn's own convention), and too-short input raises `ValueError` with the
+exact requirement. Graceful, explicit failure beats a cryptic crash deep in
+statsmodels.
+
+**5. AIC/BIC for model quality.**
+`summary()` exposes AIC and BIC — penalized likelihood scores for comparing
+models (lower is better; both punish extra parameters). They're the standard way
+to justify "why this order and not a bigger one."
+
+**6. Rebuild forecast dates myself.**
+I fit on a bare NumPy array (sidestepping statsmodels' date-frequency warnings)
+and reconstruct future dates from the inferred cadence (`gaps.median()`). Robust
+to the occasional missing week.
+
+### Mistakes & fixes
+- **`.round(3)` warned on the datetime column.** In the demo, rounding the whole
+  forecast frame triggered a pandas warning (you can't round a datetime).
+  **Fix:** round only the numeric columns and format the date separately.
+- **statsmodels convergence/frequency chatter.** Fitting short or noisy series
+  emits non-actionable warnings. **Fix:** fit on a NumPy array and suppress
+  warnings within the `fit` call only.
+
+### Interview Q&A
+
+**Q: Why ARIMA(1,1,1) specifically?**
+A: It's the simplest model that respects the data. Prices are non-stationary, so
+I need at least one order of differencing — that's the middle `1`. One AR and one
+MA term capture short-run momentum and shock correction. A small, interpretable
+model is more defensible than a complex one that overfits noise; I can justify
+every term and back it up with AIC/BIC.
+
+**Q: What does the "I" (the middle 1) do, and why does it matter here?**
+A: It differences the series — models the change from period to period instead of
+the level. ARIMA assumes stationarity (stable mean/variance), and price levels
+aren't stationary; their *changes* are much closer. Without differencing the
+model would be misspecified.
+
+**Q: Why do your confidence intervals get wider further out?**
+A: Forecast uncertainty compounds. Each step is built on the previous (already
+uncertain) prediction, so error accumulates and the interval widens. I verified
+the width is monotonically non-decreasing across the horizon. It honestly
+communicates that long-range forecasts are less certain.
+
+**Q: How do you keep the dashboard independent of which model you use?**
+A: Both forecasters expose the same `fit`/`predict` interface and return the same
+columns (`date, forecast, lower, upper`). That's the Strategy pattern — the
+dashboard depends on the contract, not the concrete model, so I can swap ARIMA
+for the linear trend (or anything else) without touching the plotting code.
+
+**Q: What are AIC and BIC?**
+A: Information criteria for model comparison — they reward goodness of fit but
+penalize extra parameters (BIC penalizes more). Lower is better. They're how I'd
+justify the chosen ARIMA order over a more complex one without just eyeballing.
+
+**Q: How does the model behave on very little data?**
+A: `fit` requires at least 10 observations and raises a clear `ValueError`
+otherwise, rather than producing a meaningless fit or crashing inside
+statsmodels. Predict/summary before fit raise `NotFittedError`.
+
+---

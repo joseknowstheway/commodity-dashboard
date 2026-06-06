@@ -124,7 +124,7 @@ Built in independent chunks; each leaves the project runnable.
 - [x] **Chunk 3** — Transformation pipeline
 - [x] **Chunk 4** — Storage layer (repository pattern)
 - [x] **Chunk 5** — Orchestration script
-- [ ] **Chunk 6** — Forecasting module
+- [x] **Chunk 6** — Forecasting module
 - [ ] **Chunk 7** — Plotly Dash dashboard
 - [ ] **Chunk 8** — Test suite
 - [ ] **Chunk 9** — Polish & documentation

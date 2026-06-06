@@ -306,6 +306,50 @@ sqlite3 data/commodity.db "SELECT series_id, COUNT(*), MIN(date), MAX(date) FROM
 sqlite3 -header -column data/commodity.db "SELECT date, value, rolling_avg_4w, z_score FROM processed_prices WHERE series_id='RWTC' ORDER BY date LIMIT 5;"
 ```
 
+## Chunk 6 — Forecasting (ARIMA)
+
+> Requires the database to be populated first (`python run_pipeline.py --refresh`).
+
+### Fast path — live smoke test
+```bash
+python -m analytics.forecasting
+```
+Expect an ARIMA summary (AIC/BIC/params), an 8-step forecast table with
+`lower < forecast < upper`, and a linear-trend comparison.
+
+### Verify the forecast contract (REPL)
+```python
+import numpy as np, pandas as pd
+from analytics.forecasting import PriceForecaster, NotFittedError
+
+dates = pd.date_range("2024-01-07", periods=60, freq="W")
+vals  = 50 + 0.5*np.arange(60) + np.random.default_rng(0).normal(0,1,60)
+df = pd.DataFrame({"date":dates, "value":vals})
+
+f = PriceForecaster().fit(df)
+fc = f.predict(steps=8)
+print(len(fc))                                   # 8
+print(((fc.lower < fc.forecast) & (fc.forecast < fc.upper)).all())   # True
+print((fc.upper - fc.lower).tolist())            # widths grow with horizon
+print(f.summary())                               # model/order/n_obs/aic/bic/params
+
+# Graceful failure modes
+try: PriceForecaster().fit(df.head(5))
+except ValueError as e: print("short series ->", e)
+try: PriceForecaster().predict()
+except NotFittedError as e: print("no fit ->", e)
+```
+
+### Forecast a real commodity from the DB
+```python
+from storage.repository import CommodityRepository
+from analytics.forecasting import PriceForecaster
+from config import settings, COMMODITIES
+with CommodityRepository(settings.db_path) as repo:
+    df = repo.get_processed(COMMODITIES["WTI_CRUDE"].series_id)
+print(PriceForecaster().fit(df).predict(steps=8))
+```
+
 ## Quick reference
 
 | Goal | Command |
