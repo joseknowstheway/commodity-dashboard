@@ -6,3 +6,6 @@ exclude =
     .venv,
     __pycache__,
     data
+# The HTML/CSS template string in this generator has unavoidably long lines.
+per-file-ignores =
+    scripts/build_walkthrough_html.py: E501

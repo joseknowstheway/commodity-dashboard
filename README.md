@@ -12,7 +12,9 @@ time-series forecasting.
 > integration, data visualization, and testing.
 
 📓 See [`concept_walkthrough.md`](concept_walkthrough.md) for a stage-by-stage
-log of the concepts, design decisions, and trade-offs behind the build.
+log of the concepts, design decisions, and trade-offs behind the build — or open
+[`concept_walkthrough.html`](concept_walkthrough.html) in a browser for a
+navigable version with collapsible interview Q&A and search.
 🧪 See [`MANUAL_TESTING.md`](MANUAL_TESTING.md) for hands-on commands to exercise
 each layer by hand.
 
