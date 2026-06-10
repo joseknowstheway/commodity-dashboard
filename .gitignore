@@ -1,6 +1,9 @@
 # --- Secrets & local config ---
 .env
 
+# --- Private planning doc (kept outside the public repo) ---
+commodity_dashboard_project.md
+
 # --- Data (generated locally, not committed) ---
 # Keep the directory in the repo, ignore its generated contents.
 data/*
